@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>🎃 El Número del Destino 2.3</title>
+<script src="/socket.io/socket.io.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Creepster&display=swap" rel="stylesheet">
+<style>
+body { font-family:"Creepster", cursive; background:#120000; color:#f96; text-align:center; transition:background 1s;}
+input, button, select { margin:6px; padding:8px; font-size:16px; border-radius:6px;}
+button:hover { box-shadow:0 0 15px #f90; cursor:pointer; animation: glow 1s infinite alternate;}
+@keyframes glow{from{box-shadow:0 0 5px #f90;}to{box-shadow:0 0 20px #ff0;}}
+#lobby,#game,#hostPanel,#ghostPanel{display:none;}
+.alive{color:#ff9;}
+.ghost{color:#8f8;}
+.revivido{color:#0ff;}
+.dead{color:#f33;}
+#timer{font-size:24px;margin:10px 0;animation:blink 1s infinite;}
+#status{font-size:18px;margin:10px;}
+h1{font-size:40px;text-shadow:3px 3px #000; animation: flicker 1.5s infinite;}
+@keyframes flicker{0%,19%,21%,23%,25%,54%,56%,100%{opacity:1;}20%,22%,24%,55%{opacity:0.4;}}
+ul{list-style:none;padding:0;}
+#ghostPanel{background:rgba(0,0,0,0.6);padding:15px;border-radius:10px;margin-top:15px;color:#8f8;}
+#ghostSmoke { position: fixed; bottom:0; width:100%; height:100%; pointer-events:none; background:url('https://i.ibb.co/7X5Lf87/humo.png') repeat-x bottom; animation: floatSmoke 20s linear infinite; opacity:0.3; display:none;}
+@keyframes floatSmoke {0% {background-position-x:0;}100% {background-position-x:2000px;}}
+.pumpkin{position:fixed; bottom:-50px; font-size:50px; animation: floatPumpkin 10s linear infinite;}
+@keyframes floatPumpkin{0%{bottom:-50px;}100%{bottom:100%;}}
+</style>
+</head>
+<body>
+<h1>🎴 El Número del Destino 2.3</h1>
+
+<div id="join">
+<input id="name" placeholder="Tu nombre">
+<button id="joinBtn">Unirse</button>
+</div>
+
+<div id="lobby">
+<h3>Jugadores conectados:</h3>
+<ul id="playersList"></ul>
+</div>
+
+<div id="game">
+<h3 id="roundTitle"></h3>
+<div id="timer"></div>
+<p id="status">Tu número está oculto 👁️</p>
+<ul id="numbersList"></ul>
+<div id="guessDiv">
+<input id="guess" placeholder="Tu número (1-20)">
+<button id="guessBtn">Adivinar</button>
+</div>
+</div>
+
+<div id="hostPanel">
+<h3>🎩 Panel del Anfitrión</h3>
+<ul id="hostPlayersList"></ul>
+<button id="startGameBtn">🚀 Iniciar partida</button>
+<button id="nextPhaseBtn">➡️ Siguiente fase (Adivinación)</button>
+<button id="nextRoundBtn">🔄 Siguiente ronda</button>
+<button id="resetGameBtn">💀 Reiniciar partida</button>
+<select id="kickSelect"></select>
+<button id="kickBtn">🦴 Expulsar</button>
+</div>
+
+<div id="ghostPanel">
+<h3>👻 Estado Fantasma</h3>
+<p id="ghostMessage"></p>
+</div>
+
+<div id="ghostSmoke"></div>
+<div class="pumpkin" style="left:10%;">🎃</div>
+<div class="pumpkin" style="left:50%;">🎃</div>
+<div class="pumpkin" style="left:80%;">🎃</div>
+
+<audio id="soundEnd" src="https://actions.google.com/sounds/v1/alarms/air_raid_siren.ogg"></audio>
+<audio id="soundCorrect" src="https://actions.google.com/sounds/v1/cartoon/clang_and_wobble.ogg"></audio>
+<audio id="soundDead" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg"></audio>
+<audio id="soundRevive" src="https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg"></audio>
+
+<script>
+const socket=io();
+let myName=null,phase="lobby",hostId=null,gameStarted=false;
+const joinDiv=document.getElementById("join");
+const lobbyDiv=document.getElementById("lobby");
+const gameDiv=document.getElementById("game");
+const hostPanel=document.getElementById("hostPanel");
+const playersList=document.getElementById("playersList");
+const hostPlayersList=document.getElementById("hostPlayersList");
+const numbersList=document.getElementById("numbersList");
+const kickSelect=document.getElementById("kickSelect");
+const timerDisplay=document.getElementById("timer");
+const statusDisplay=document.getElementById("status");
+const ghostPanel=document.getElementById("ghostPanel");
+const ghostMessage=document.getElementById("ghostMessage");
+const ghostSmoke=document.getElementById("ghostSmoke");
+
+const soundEnd=document.getElementById("soundEnd");
+const soundCorrect=document.getElementById("soundCorrect");
+const soundDead=document.getElementById("soundDead");
+const soundRevive=document.getElementById("soundRevive");
+
+let audioUnlocked=false;
+document.body.addEventListener('click',()=>{if(!audioUnlocked){[soundEnd,soundCorrect,soundDead,soundRevive].forEach(a=>a.play().catch(()=>{}));audioUnlocked=true;}},{once:true});
+
+document.getElementById("joinBtn").onclick=()=>{myName=document.getElementById("name").value.trim(); if(myName) socket.emit("joinGame",myName)};
+document.getElementById("startGameBtn").onclick=()=>socket.emit("startGame");
+document.getElementById("nextPhaseBtn").onclick=()=>socket.emit("nextPhase");
+document.getElementById("nextRoundBtn").onclick=()=>socket.emit("nextRound");
+document.getElementById("kickBtn").onclick=()=>{ const id=kickSelect.value; if(id) socket.emit("kickPlayer",id); };
+document.getElementById("resetGameBtn").onclick=()=>socket.emit("resetGame");
+
+document.getElementById("guessBtn").onclick=()=>{
+  const g=document.getElementById("guess").value.trim();
+  if(!g) return;
+  socket.emit("guessNumber",g);
+  document.getElementById("guess").value="";
+};
+
+socket.on("updatePlayers",data=>{
+  const {players,round,phase:newPhase,hostId:hId,gameStarted:gs,timeLeft:tL}=data;
+  phase=newPhase; hostId=hId; gameStarted=gs;
+  timerDisplay.textContent=`${Math.floor(tL/60)}:${(tL%60).toString().padStart(2,'0')}`;
+  playersList.innerHTML=""; numbersList.innerHTML=""; hostPlayersList.innerHTML=""; kickSelect.innerHTML="";
+
+  for(let id in players){
+    const p=players[id];
+    const li=document.createElement("li");
+    li.textContent=`${p.name} (${
+        p.status==="vivo"?"🟡 Vivo":
+        p.status==="revivido"?"✨ Revivido":
+        p.status==="eliminado"?"💀 Eliminado":"👻 Fantasma"})`;
+    li.className=p.status==="vivo"?"alive":p.status==="revivido"?"revivido":p.status==="eliminado"?"dead":"ghost";
+    playersList.appendChild(li);
+
+    const hi=document.createElement("li");
+    hi.textContent=li.textContent;
+    hostPlayersList.appendChild(hi);
+
+    const opt=document.createElement("option");
+    opt.value=id; opt.textContent=p.name;
+    kickSelect.appendChild(opt);
+
+    const ni=document.createElement("li");
+    ni.textContent=(p.name===myName)?`${p.name}: ???`:`${p.name}: ${p.number}`;
+    numbersList.appendChild(ni);
+
+    if(p.name===myName){
+      if(p.status==="fantasma"){
+        ghostPanel.style.display="block"; ghostSmoke.style.display="block";
+        ghostMessage.innerHTML=`💀 ¡Has muerto! Ahora eres un <b>fantasma 👻</b><br><br>
+        ☠️ <b>No puedes hablar ni escribir</b>.<br>
+        ☝️ Solo puedes mostrar <b>una cifra</b> con tus dedos a quien tú quieras.<br>
+        😈 Puedes mentir o decir la verdad, tú decides...<br><br>
+        🎯 Tu objetivo secreto es <b>${p.ghostTarget ? players[p.ghostTarget]?.name:"??"}</b><br>
+        Si tu objetivo falla su número y se convierte en fantasma, <b>revivirás</b> al inicio de la próxima ronda.`;
+        document.getElementById("guessDiv").style.display="none";
+        statusDisplay.textContent="";
+      } else if(p.status==="eliminado"){
+        gameDiv.style.display="none"; ghostPanel.style.display="block";
+        ghostMessage.innerHTML=`💀 Estás eliminado.<br>Observa desde la distancia 👻`;
+      } else {
+        ghostPanel.style.display="none"; ghostSmoke.style.display="none"; gameDiv.style.display="block";
+        if(phase==="main"){ 
+            document.getElementById("guessDiv").style.display="none"; 
+            statusDisplay.textContent="🕯️ Habla con los demás jugadores para descubrir tu número...";
+        } else if(phase==="guess"){ 
+            document.getElementById("guessDiv").style.display="block"; 
+            document.getElementById("guessBtn").disabled=p.guessed; 
+            statusDisplay.textContent=p.guessed?"✅ Has adivinado tu número, espera al resto de jugadores":"🎃 Adivina tu número antes de que acabe el tiempo!";
+        }
+      }
+    }
+  }
+
+  if(myName) joinDiv.style.display="none"; lobbyDiv.style.display="block"; gameDiv.style.display="block"; 
+  hostPanel.style.display=(socket.id===hostId)?"block":"none";
+});
+
+socket.on("timerUpdate",time=>{
+  timerDisplay.textContent=`${Math.floor(time/60)}:${(time%60).toString().padStart(2,'0')}`;
+  if(time===0) soundEnd.play();
+});
+
+socket.on("kicked",()=>{
+  alert("Has sido expulsado del juego 💀");
+  location.reload();
+});
+
+socket.on("revived",()=>{
+  soundRevive.play();
+  alert("🎉 Has revivido y vuelves a jugar como Revivido ✨");
+});
+
+socket.on("resetAll",()=>{
+  location.reload();
+});
+</script>
+</body>
+</html>

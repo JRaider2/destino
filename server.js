@@ -4,7 +4,6 @@ const http = require("http").createServer(app);
 const io = require("socket.io")(http);
 
 app.use(express.static("public"));
-const PORT = 3000;
 
 let players = {};
 let round = 1;
@@ -221,3 +220,4 @@ io.on("connection", socket => {
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => console.log(`🎃 Servidor iniciado en el puerto ${PORT}`));
+
